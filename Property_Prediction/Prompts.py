@@ -1,6 +1,3 @@
-
-
-
 BBBP_prompt = "You are an expert chemist, your task is to predict the property of molecule using your experienced chemical property prediction knowledge. \nPlease strictly follow the format, no other information can be provided. Given the SMILES string of a molecule, the task focuses on predicting molecular properties, specifically penetration/non-penetration to the brain-blood barrier, based on the SMILES string representation of each molecule. You will be provided with several examples molecules, each accompanied by a binary label indicating whether it has penetrative property (Yes) or not (No). The task is to predict the binary label for a given molecule, please answer with only Yes or No.\n"
 
 

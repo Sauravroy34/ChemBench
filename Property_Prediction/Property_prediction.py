@@ -32,12 +32,12 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from sklearn.metrics import (
-    accuracy_score, f1_score, roc_auc_score,
-    precision_score, recall_score, matthews_corrcoef,
+    accuracy_score, f1_score
 )
 
-from .utils import LiteLLMModel, HuggingFaceModel
-from .data import load_dataset, LABEL_COL_MAP, TASK_DESCRIPTION
+from ChemLLMBench.Property_Prediction.data import load_dataset, LABEL_COL_MAP, TASK_DESCRIPTION
+from ChemLLMBench.utils import LiteLLMModel, HuggingFaceModel
+
 
 # ── Supported datasets ──────────────────────────────────────────────────────
 SUPPORTED_DATASETS = ["BBBP", "BACE", "Tox21", "HIV", "ClinTox"]
@@ -99,11 +99,6 @@ def _compute_metrics(y_true, y_pred):
         "invalid_predictions": n_invalid,
     }
 
-    # ROC-AUC only when both classes present
-    if len(set(y_true_arr)) > 1:
-        metrics["roc_auc"] = roc_auc_score(y_true_arr, y_pred_arr)
-    else:
-        metrics["roc_auc"] = None
 
     return metrics
 
