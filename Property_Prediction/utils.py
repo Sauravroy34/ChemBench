@@ -5,8 +5,11 @@ from litellm import completion
 from .data import load_dataset
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
+from dotenv import load_dotenv
+import litellm
 
-
+load_dotenv(override=True)
+litellm.drop_params = True
 
 class ModelInterface:
 
@@ -25,27 +28,36 @@ class LiteLLMModel(ModelInterface):
         model = LiteLLMModel(model_name="huggingface/meta-llama/Llama-2-7b-chat-hf")
         model = LiteLLMModel(model_name="openai/custom-model", api_base="http://localhost:8000/v1")
     """
-    def __init__(self, model_name: str, api_key: str = None, api_base: str = None, max_retries: int = 6, **kwargs):
+    def __init__(self, model_name: str, max_new_tokens: int = 50, max_retries: int = 6, **kwargs):
         self.model_name = model_name
-        self.api_key = api_key
-        self.api_base = api_base
+        self.max_new_tokens = max_new_tokens
         self.max_retries = max_retries
         self.kwargs = kwargs
 
-    def generate(self, prompt: str, n: int = 1, temperature: float = 0.7) -> list[str]:
+    def _generate_parameters(self,sys_prompt,user_prompt):
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        params = {
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": self.kwargs.get("temperature", 0.0),
+            "max_tokens":  self.max_new_tokens,
+        }
+
+        return params
+
+    def generate(self, sys_prompt,user_prompt, n = 1) -> list[str]:
+        params = self._generate_parameters(sys_prompt,user_prompt)
+        
         outputs = []
         for _ in range(n):
             text = ""
             for attempt in range(self.max_retries):
                 try:
-                    response = completion(
-                        model=self.model_name,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=temperature,
-                        api_key=self.api_key,
-                        api_base=self.api_base,
-                        **self.kwargs
-                    )
+                    response = completion(**params)
                     text = response.choices[0].message.content.strip()
                     break
                 except Exception as e:
@@ -89,14 +101,14 @@ class HuggingFaceModel(ModelInterface):
 
 
 
-    def generate(self, user_prompt, sys_prompt, n=1, temperature=0.7) -> list[str]:
+    def generate(self, user_prompt, sys_prompt, n=1) -> list[str]:
         outputs = []
 
         for _ in range(n):
             prompt = self.build_chat_prompt(user_prompt, sys_prompt)
 
             params = SamplingParams(
-                temperature=temperature,
+                temperature=self.temperature,
                 top_p=1.0,
                 max_tokens=self.max_new_tokens,
             )

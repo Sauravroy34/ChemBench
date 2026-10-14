@@ -94,9 +94,6 @@ def _compute_metrics(y_true, y_pred):
     metrics = {
         "accuracy": accuracy_score(y_true_arr, y_pred_arr),
         "f1": f1_score(y_true_arr, y_pred_arr, zero_division=0),
-        "precision": precision_score(y_true_arr, y_pred_arr, zero_division=0),
-        "recall": recall_score(y_true_arr, y_pred_arr, zero_division=0),
-        "mcc": matthews_corrcoef(y_true_arr, y_pred_arr),
         "total": total,
         "valid_predictions": n_valid,
         "invalid_predictions": n_invalid,
@@ -112,14 +109,12 @@ def _compute_metrics(y_true, y_pred):
 
 
 # ── Helper: build model ──────────────────────────────────────────────────────
-def _build_model(backend, model_name, temperature, api_key=None, api_base=None,
-                 max_new_tokens=50):
+def _build_model(backend, model_name, temperature, max_new_tokens=50):
     """Instantiate the right ModelInterface subclass."""
     if backend == "api":
         return LiteLLMModel(
             model_name=model_name,
-            api_key=api_key,
-            api_base=api_base,
+            max_new_tokens=max_new_tokens
         )
     elif backend == "local":
         return HuggingFaceModel(
@@ -140,8 +135,6 @@ def run_benchmark(
     k: int = 8,
     n: int = 1,
     temperature: float = 0.0,
-    api_key: str = None,
-    api_base: str = None,
     max_new_tokens: int = 50,
     output_dir: str = "results",
 ):
@@ -197,8 +190,6 @@ def run_benchmark(
         backend=backend,
         model_name=model_name,
         temperature=temperature,
-        api_key=api_key,
-        api_base=api_base,
         max_new_tokens=max_new_tokens,
     )
 
@@ -212,18 +203,10 @@ def run_benchmark(
         usr_prompt = user_prompts[idx]
 
         # Generate model response
-        if backend == "api":
-            # LiteLLM expects a single combined prompt
-            full_prompt = sys_prompt + "\n" + usr_prompt
-            outputs = model.generate(
-                prompt=full_prompt, n=n, temperature=temperature
-            )
-        else:
-            # HuggingFace / vLLM uses separate system + user prompts
-            outputs = model.generate(
-                user_prompt=usr_prompt, sys_prompt=sys_prompt,
-                n=n, temperature=temperature,
-            )
+        outputs = model.generate(
+            user_prompt=usr_prompt, sys_prompt=sys_prompt,
+            n=n
+        )
 
         raw_text = outputs[0] if outputs else ""
         raw_outputs.append(raw_text)
@@ -242,10 +225,6 @@ def run_benchmark(
     print(f"{'─' * 50}")
     print(f"  Accuracy : {metrics['accuracy']:.4f}")
     print(f"  F1       : {metrics['f1']:.4f}")
-    print(f"  Precision: {metrics['precision']:.4f}")
-    print(f"  Recall   : {metrics['recall']:.4f}")
-    print(f"  MCC      : {metrics['mcc']:.4f}")
-    print(f"  ROC-AUC  : {metrics['roc_auc']:.4f}" if metrics["roc_auc"] is not None else "  ROC-AUC  : N/A")
     print(f"  Valid    : {metrics['valid_predictions']}/{metrics['total']}")
     print(f"{'═' * 50}\n")
 
@@ -328,8 +307,6 @@ def main():
         k=args.k,
         n=args.n,
         temperature=args.temperature,
-        api_key=args.api_key,
-        api_base=args.api_base,
         max_new_tokens=args.max_new_tokens,
         output_dir=args.output_dir,
     )
