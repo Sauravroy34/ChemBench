@@ -16,7 +16,6 @@ random.seed(SEED)
 
 FILES = {
     "train": "https://raw.githubusercontent.com/blender-nlp/MolT5/main/ChEBI-20_data/train.txt",
-    "val": "https://raw.githubusercontent.com/blender-nlp/MolT5/main/ChEBI-20_data/val.txt",
     "test": "https://raw.githubusercontent.com/blender-nlp/MolT5/main/ChEBI-20_data/test.txt"
 }
 
@@ -167,7 +166,6 @@ def load_dataset(name, sample_strategy="random", k=0):
         dfs[split] = _canonicalise_smiles(df)
 
     df_train = dfs["train"]
-    df_val = dfs["val"]  
     df_test = dfs["test"]
 
     if len(df_test) >= 100:

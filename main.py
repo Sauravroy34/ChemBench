@@ -30,25 +30,25 @@ TASK_REGISTRY = {
     # ── Name Prediction (4 sub-tasks) ────────────────────────────────────
     "smiles_to_iupac": {
         "display": "Name Prediction – SMILES → IUPAC",
-        "module": "ChemLLMBench.Name_Prediction.name_pred",
+        "module": "Name_Prediction.name_pred",
         "function": "run_benchmark",
         "kwargs": {"task_name": "SMILES_TO_IUPAC"},
     },
     "iupac_to_smiles": {
         "display": "Name Prediction – IUPAC → SMILES",
-        "module": "ChemLLMBench.Name_Prediction.name_pred",
+        "module": "Name_Prediction.name_pred",
         "function": "run_benchmark",
         "kwargs": {"task_name": "IUPAC_TO_SMILES"},
     },
     "smiles_to_formula": {
         "display": "Name Prediction – SMILES → Formula",
-        "module": "ChemLLMBench.Name_Prediction.name_pred",
+        "module": "Name_Prediction.name_pred",
         "function": "run_benchmark",
         "kwargs": {"task_name": "SMILES_TO_FORMULA"},
     },
     "formula_to_smiles": {
         "display": "Name Prediction – Formula → SMILES",
-        "module": "ChemLLMBench.Name_Prediction.name_pred",
+        "module": "Name_Prediction.name_pred",
         "function": "run_benchmark",
         "kwargs": {"task_name": "FORMULA_TO_SMILES"},
     },
@@ -56,31 +56,31 @@ TASK_REGISTRY = {
     # ── Property Prediction (5 datasets) ─────────────────────────────────
     "bbbp": {
         "display": "Property Prediction – BBBP",
-        "module": "ChemLLMBench.Property_Prediction.Property_prediction",
+        "module": "Property_Prediction.Property_prediction",
         "function": "run_benchmark",
         "kwargs": {"dataset_name": "BBBP"},
     },
     "bace": {
         "display": "Property Prediction – BACE",
-        "module": "ChemLLMBench.Property_Prediction.Property_prediction",
+        "module": "Property_Prediction.Property_prediction",
         "function": "run_benchmark",
         "kwargs": {"dataset_name": "BACE"},
     },
     "tox21": {
         "display": "Property Prediction – Tox21",
-        "module": "ChemLLMBench.Property_Prediction.Property_prediction",
+        "module": "Property_Prediction.Property_prediction",
         "function": "run_benchmark",
         "kwargs": {"dataset_name": "Tox21"},
     },
     "hiv": {
         "display": "Property Prediction – HIV",
-        "module": "ChemLLMBench.Property_Prediction.Property_prediction",
+        "module": "Property_Prediction.Property_prediction",
         "function": "run_benchmark",
         "kwargs": {"dataset_name": "HIV"},
     },
     "clintox": {
         "display": "Property Prediction – ClinTox",
-        "module": "ChemLLMBench.Property_Prediction.Property_prediction",
+        "module": "Property_Prediction.Property_prediction",
         "function": "run_benchmark",
         "kwargs": {"dataset_name": "ClinTox"},
     },
@@ -88,7 +88,7 @@ TASK_REGISTRY = {
     # ── Reaction Prediction ──────────────────────────────────────────────
     "reaction_prediction": {
         "display": "Forward Reaction Prediction",
-        "module": "ChemLLMBench.Reaction_prediction.reaction_pred",
+        "module": "Reaction_prediction.reaction_pred",
         "function": "run_benchmark",
         "kwargs": {},
     },
@@ -96,7 +96,7 @@ TASK_REGISTRY = {
     # ── Retrosynthesis ───────────────────────────────────────────────────
     "retrosynthesis": {
         "display": "Retrosynthesis",
-        "module": "ChemLLMBench.Retrosynthesis.retro",
+        "module": "Retrosynthesis.retro",
         "function": "run_benchmark",
         "kwargs": {},
     },
@@ -104,13 +104,13 @@ TASK_REGISTRY = {
     # ── Molecule Design (2 sub-tasks) ────────────────────────────────────
     "mol_caption": {
         "display": "Molecule Caption (SMILES → Description)",
-        "module": "ChemLLMBench.Molecule_Design.Mol_design_and_mol_caption",
+        "module": "Molecule_Design.Mol_design_and_mol_caption",
         "function": "run_benchmark",
         "kwargs": {"task_name": "MOL_CAPTION"},
     },
     "mol_design": {
         "display": "Molecule Design (Description → SMILES)",
-        "module": "ChemLLMBench.Molecule_Design.Mol_design_and_mol_caption",
+        "module": "Molecule_Design.Mol_design_and_mol_caption",
         "function": "run_benchmark",
         "kwargs": {"task_name": "MOL_DESIGN"},
     },
