@@ -5,15 +5,9 @@ Modular benchmark for molecular naming and identifier prediction using LLMs.
 Supports IUPAC name generation, SMILES prediction, and molecular formula tasks.
 
 Usage (as a script):
-    # API model (OpenAI, Anthropic, etc.)
     python -m Name_Prediction.name_pred \
         --task SMILES_TO_IUPAC --model gpt-4 --backend api \
         --strategy random --k 8 --n 1 --temperature 0.0
-
-    # Local HuggingFace model via vLLM
-    python -m Name_Prediction.name_pred \
-        --task IUPAC_TO_SMILES --model meta-llama/Llama-2-7b-chat-hf --backend local \
-        --strategy scaffold --k 8 --n 1 --temperature 0.0
 
 Usage (as a library):
     from ChemLLMBench.Name_Prediction.name_pred import run_benchmark
@@ -28,15 +22,28 @@ import re
 import json
 import argparse
 import datetime
-import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from rdkit import Chem, RDLogger
 from ChemLLMBench.Name_Prediction.data import load_dataset, TASK_COL_MAP
 from ChemLLMBench.utils import LiteLLMModel, HuggingFaceModel
+
+RDLogger.DisableLog("rdApp.*")  # silence RDKit parse warnings for invalid SMILES
 
 
 # ── Supported tasks ─────────────────────────────────────────────────────────
 SUPPORTED_TASKS = list(TASK_COL_MAP.keys())
+
+# Column names / order used when reporting accuracy
+TASK_SHORT_NAME = {
+    "SMILES_TO_IUPAC":   "smiles2iupac",
+    "IUPAC_TO_SMILES":   "iupac2smiles",
+    "SMILES_TO_FORMULA": "smiles2formula",
+    "FORMULA_TO_SMILES": "formula2smiles",
+}
+REPORT_COLUMNS = list(TASK_SHORT_NAME.values())
+
+_FORMULA_TOKEN = re.compile(r"([A-Z][a-z]?)(\d*)")
 
 
 # ── Helper: parse the generated answer from raw LLM output ──────────────────
@@ -45,7 +52,7 @@ def _parse_prediction(raw_text, task_name):
 
     The model is prompted to reply in the format ``<col>: <value>``.
     This function tries to extract ``<value>`` from that pattern,
-    falling back to the full stripped text if no pattern is found.
+    falling back to the first non-empty line if no pattern is found.
 
     Returns an empty string on parse failure.
     """
@@ -72,110 +79,73 @@ def _parse_prediction(raw_text, task_name):
     return ""
 
 
-# ── Helper: validate a SMILES string ────────────────────────────────────────
-def _is_valid_smiles(s):
-    """Return True if *s* can be parsed into a valid RDKit molecule."""
-    from rdkit import Chem
-    if not s:
-        return False
-    mol = Chem.MolFromSmiles(s)
-    return mol is not None
-
-
-# ── Helper: canonicalise SMILES for exact comparison ────────────────────────
+# ── Normalisers (one per target type) ───────────────────────────────────────
 def _canonical(s):
-    """Return canonical SMILES or empty string if invalid."""
-    from rdkit import Chem
+    """Canonical SMILES, or "" if empty/invalid."""
     if not s:
         return ""
     mol = Chem.MolFromSmiles(s)
-    if mol is None:
-        return ""
-    return Chem.MolToSmiles(mol)
+    return Chem.MolToSmiles(mol) if mol is not None else ""
 
 
-# ── Helper: Tanimoto similarity between two SMILES ─────────────────────────
-def _tanimoto_similarity(smi_a, smi_b):
-    """Morgan-fingerprint Tanimoto similarity between two SMILES strings.
-    Returns 0.0 if either SMILES is invalid."""
-    from rdkit import Chem, DataStructs
-    from rdkit.Chem import rdFingerprintGenerator
+def _formula_key(s):
+    """Order-independent key for a molecular formula, e.g. 'H6C2O' == 'C2H6O'.
 
-    mol_a = Chem.MolFromSmiles(smi_a) if smi_a else None
-    mol_b = Chem.MolFromSmiles(smi_b) if smi_b else None
-    if mol_a is None or mol_b is None:
-        return 0.0
-
-    fp_gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
-    fp_a = fp_gen.GetFingerprint(mol_a)
-    fp_b = fp_gen.GetFingerprint(mol_b)
-    return DataStructs.TanimotoSimilarity(fp_a, fp_b)
-
-
-# ── Helper: compute metrics ─────────────────────────────────────────────────
-def _compute_metrics(y_true, y_pred, task_name):
-    """Compute task-appropriate metrics for name-prediction.
-
-    Metrics computed:
-    - **exact_match**: fraction of predictions that exactly match ground truth
-      (case-insensitive for text, canonical SMILES for SMILES outputs).
-    - **valid_rate**: fraction of non-empty predictions.
-
-    For tasks that output SMILES (IUPAC_TO_SMILES, FORMULA_TO_SMILES):
-    - **valid_smiles_rate**: fraction of predictions that are valid SMILES.
-    - **mean_tanimoto**: mean Morgan-FP Tanimoto similarity with ground truth.
-
-    For tasks that output formulas (SMILES_TO_FORMULA):
-    - **formula_match**: fraction of formulas that match (case-insensitive).
+    Case-sensitive on purpose: 'CO' (carbon monoxide) is not 'Co' (cobalt).
+    Falls back to the whitespace-stripped string if it can't be parsed
+    (parentheses, charges, etc.).
     """
+    s = re.sub(r"\s+", "", s)
+    if not s:
+        return ""
+    tokens = _FORMULA_TOKEN.findall(s)
+    if "".join(el + n for el, n in tokens) != s:
+        return s
+    counts = {}
+    for el, n in tokens:
+        counts[el] = counts.get(el, 0) + (int(n) if n else 1)
+    return ",".join(f"{el}{c}" for el, c in sorted(counts.items()))
+
+
+def _iupac_key(s):
+    """Lower-cased, whitespace-collapsed IUPAC name."""
+    return re.sub(r"\s+", " ", s.strip().lower())
+
+
+def _normaliser_for(to_col):
+    return {"smiles": _canonical, "formula": _formula_key, "iupac": _iupac_key}[to_col]
+
+
+# ── Helper: compute metrics (accuracy only) ─────────────────────────────────
+def _compute_metrics(y_true, y_pred, task_name):
+    """Accuracy: fraction of predictions equal to the reference after
+    normalisation. Empty or invalid predictions never count as correct."""
     _, to_col = TASK_COL_MAP[task_name]
-    total = len(y_true)
+    norm = _normaliser_for(to_col)
 
-    # ── basic counts ──
-    n_valid = sum(1 for p in y_pred if p.strip())
-    n_invalid = total - n_valid
-
-    # ── exact match (normalised) ──
-    exact = 0
+    correct = 0
     for gt, pred in zip(y_true, y_pred):
-        gt_s = str(gt).strip()
-        pred_s = str(pred).strip()
-        if to_col == "smiles":
-            # Compare canonical forms
-            if _canonical(pred_s) and _canonical(pred_s) == _canonical(gt_s):
-                exact += 1
-        else:
-            # Case-insensitive text comparison
-            if pred_s.lower() == gt_s.lower():
-                exact += 1
+        p = norm(str(pred).strip())
+        t = norm(str(gt).strip())
+        if p and p == t:
+            correct += 1
 
-    metrics = {
-        "exact_match": exact / total if total else 0.0,
-        "valid_rate": n_valid / total if total else 0.0,
+    total = len(y_true)
+    return {
+        "task": TASK_SHORT_NAME[task_name],
+        "accuracy": correct / total if total else 0.0,
+        "correct": correct,
         "total": total,
-        "valid_predictions": n_valid,
-        "invalid_predictions": n_invalid,
     }
 
-    # ── SMILES-output tasks: validity & Tanimoto ──
-    if to_col == "smiles":
-        valid_smiles = sum(1 for p in y_pred if _is_valid_smiles(p.strip()))
-        tanimoto_scores = [
-            _tanimoto_similarity(str(gt).strip(), str(p).strip())
-            for gt, p in zip(y_true, y_pred)
-        ]
-        metrics["valid_smiles_rate"] = valid_smiles / total if total else 0.0
-        metrics["mean_tanimoto"] = float(np.mean(tanimoto_scores)) if tanimoto_scores else 0.0
 
-    # ── Formula-output task ──
-    if to_col == "formula":
-        formula_match = sum(
-            1 for gt, p in zip(y_true, y_pred)
-            if str(p).strip().lower() == str(gt).strip().lower()
-        )
-        metrics["formula_match"] = formula_match / total if total else 0.0
-
-    return metrics
+def format_accuracy_row(results):
+    """results: {short_task_name: accuracy}. Returns (header_line, value_line)."""
+    header = "  ".join(f"{c:>14}" for c in REPORT_COLUMNS)
+    values = "  ".join(
+        f"{results[c]:>14.4f}" if c in results else f"{'-':>14}" for c in REPORT_COLUMNS
+    )
+    return header, values
 
 
 # ── Helper: build model ─────────────────────────────────────────────────────
@@ -215,28 +185,6 @@ def run_benchmark(
     """
     Run the name-prediction benchmark on one task.
 
-    Parameters
-    ----------
-    task_name : str
-        One of SMILES_TO_IUPAC, IUPAC_TO_SMILES, SMILES_TO_FORMULA,
-        FORMULA_TO_SMILES.
-    model_name : str
-        Model identifier (e.g. "gpt-4", "meta-llama/Llama-2-7b-chat-hf").
-    backend : str
-        "api" for LiteLLM-based calls, "local" for vLLM-based local inference.
-    sample_strategy : str
-        "random" or "scaffold" for few-shot example selection.
-    k : int
-        Number of few-shot examples (0 for zero-shot).
-    n : int
-        Number of completions to sample per molecule.
-    temperature : float
-        Sampling temperature.
-    max_new_tokens : int
-        Max tokens to generate.
-    output_dir : str
-        Directory to save results.
-
     Returns
     -------
     dict  with keys: "metrics", "predictions", "raw_outputs"
@@ -270,39 +218,29 @@ def run_benchmark(
 
     print(f"[*] Running inference on {len(user_prompts)} molecules …")
     for idx in tqdm(range(len(user_prompts)), desc=task_name):
-        sys_prompt = system_prompts[idx]
-        usr_prompt = user_prompts[idx]
-
-        # Generate model response
         outputs = model.generate(
-            user_prompt=usr_prompt, sys_prompt=sys_prompt,
+            user_prompt=user_prompts[idx],
+            sys_prompt=system_prompts[idx],
             n=n,
         )
 
         raw_text = outputs[0] if outputs else ""
         raw_outputs.append(raw_text)
-
-        pred = _parse_prediction(raw_text, task_name)
-        predictions.append(pred)
+        predictions.append(_parse_prediction(raw_text, task_name))
 
     # ── 4. Evaluate ──────────────────────────────────────────────────────
     print("[*] Computing metrics …")
     metrics = _compute_metrics(y_true, predictions, task_name)
 
-    print(f"\n{'═' * 55}")
-    print(f"  Task    : {task_name}")
+    print(f"\n{'═' * 70}")
     print(f"  Model   : {model_name}")
     print(f"  Strategy: {sample_strategy} (k={k})")
-    print(f"{'─' * 55}")
-    print(f"  Exact Match  : {metrics['exact_match']:.4f}")
-    print(f"  Valid Rate   : {metrics['valid_rate']:.4f}")
-    if "valid_smiles_rate" in metrics:
-        print(f"  Valid SMILES  : {metrics['valid_smiles_rate']:.4f}")
-        print(f"  Mean Tanimoto: {metrics['mean_tanimoto']:.4f}")
-    if "formula_match" in metrics:
-        print(f"  Formula Match: {metrics['formula_match']:.4f}")
-    print(f"  Valid        : {metrics['valid_predictions']}/{metrics['total']}")
-    print(f"{'═' * 55}\n")
+    print(f"  Correct : {metrics['correct']}/{metrics['total']}")
+    print(f"{'─' * 70}")
+    header, values = format_accuracy_row({metrics["task"]: metrics["accuracy"]})
+    print(header)
+    print(values)
+    print(f"{'═' * 70}\n")
 
     # ── 5. Save results ──────────────────────────────────────────────────
     os.makedirs(output_dir, exist_ok=True)
@@ -310,7 +248,6 @@ def run_benchmark(
     safe_model = model_name.replace("/", "_").replace("\\", "_")
     run_tag = f"{task_name}_{safe_model}_{sample_strategy}_k{k}_{timestamp}"
 
-    # Save predictions CSV
     results_df = df_test.copy().reset_index(drop=True)
     results_df["raw_output"] = raw_outputs
     results_df["prediction"] = predictions
@@ -318,7 +255,6 @@ def run_benchmark(
     csv_path = os.path.join(output_dir, f"{run_tag}_predictions.csv")
     results_df.to_csv(csv_path, index=False)
 
-    # Save metrics JSON
     meta = {
         "task": task_name,
         "model": model_name,

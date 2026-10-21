@@ -15,7 +15,7 @@ from .prompts import SMILES_TO_IUPAC, IUPAC_TO_SMILES, SMILES_TO_FORMULA, FORMUL
 SEED = 42
 random.seed(SEED)
 
-URL = Path("Name_Prediction") / "llm_test.csv"
+URL = Path(__file__).parent / "llm_test.csv"
 
 # Maps each task name to (input_col, output_col)
 TASK_COL_MAP = {

@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import random
 import requests
 import numpy as np
@@ -17,7 +18,8 @@ Please strictly follow the format, no other information can be provided. You sho
 # ----------------------------- config -----------------------------
 SEED = 42
 SAMPLE_SIZE = 100
-TEST_SET_CSV = "uspto_test.csv"   # if this file exists it is used as the test set
+_DATA_DIR = Path(__file__).parent
+TEST_SET_CSV = str(_DATA_DIR / "uspto_test.csv")   # if this file exists it is used as the test set
 
 random.seed(SEED)
 
@@ -206,9 +208,3 @@ def load_forward_dataset(sample_strategy="random", k=5, name="forward"):
     )
     return system_prompts, user_prompts, df_test
 
-
-if __name__ == "__main__":
-    system_prompts, user_prompts, df_test = load_forward_dataset("scaffold", k=5)
-    print(system_prompts[0])
-    print(user_prompts[0])
-    print("Ground truth:", df_test[TARGET_COL].iloc[0])
