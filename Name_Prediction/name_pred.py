@@ -25,8 +25,8 @@ import datetime
 import pandas as pd
 from tqdm import tqdm
 from rdkit import Chem, RDLogger
-from ChemLLMBench.Name_Prediction.data import load_dataset, TASK_COL_MAP
-from ChemLLMBench.utils import LiteLLMModel, HuggingFaceModel
+from .data import load_dataset, TASK_COL_MAP
+from utils import LiteLLMModel, HuggingFaceModel
 
 RDLogger.DisableLog("rdApp.*")  # silence RDKit parse warnings for invalid SMILES
 

@@ -11,8 +11,8 @@ import Levenshtein
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdFingerprintGenerator, MACCSkeys
 
-from ChemLLMBench.utils import LiteLLMModel, HuggingFaceModel
-from ChemLLMBench.Molecule_Design.data import load_dataset, TASK_COL_MAP
+from utils import LiteLLMModel, HuggingFaceModel
+from .data import load_dataset, TASK_COL_MAP
 
 # ── Supported tasks ─────────────────────────────────────────────────────────
 SUPPORTED_TASKS = list(TASK_COL_MAP.keys())

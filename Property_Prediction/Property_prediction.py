@@ -35,8 +35,8 @@ from sklearn.metrics import (
     accuracy_score, f1_score
 )
 
-from ChemLLMBench.Property_Prediction.data import load_dataset, LABEL_COL_MAP, TASK_DESCRIPTION
-from ChemLLMBench.utils import LiteLLMModel, HuggingFaceModel
+from .data import load_dataset, LABEL_COL_MAP, TASK_DESCRIPTION
+from utils import LiteLLMModel, HuggingFaceModel
 
 
 # ── Supported datasets ──────────────────────────────────────────────────────

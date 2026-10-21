@@ -7,9 +7,9 @@ import pandas as pd
 from tqdm import tqdm
 from rdkit import Chem, RDLogger
 
-from ChemLLMBench.utils import LiteLLMModel, HuggingFaceModel
+from utils import LiteLLMModel, HuggingFaceModel
 # Adjust the module path / function name to match your forward-reaction data file
-from ChemLLMBench.Reaction_prediction.data import (
+from .data import (
     load_forward_dataset as load_dataset,
     INPUT_COL, TARGET_COL, INPUT_LABEL, TARGET_LABEL,
 )
