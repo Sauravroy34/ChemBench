@@ -31,7 +31,6 @@ import datetime
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-
 from ChemLLMBench.Name_Prediction.data import load_dataset, TASK_COL_MAP
 from ChemLLMBench.utils import LiteLLMModel, HuggingFaceModel
 

@@ -14,7 +14,7 @@ class ModelInterface:
     def generate(self, prompt: str, n: int = 1, temperature: float = 0.7) -> list[str]:
         raise NotImplementedError
 
-        
+
 class LiteLLMModel(ModelInterface):
 
     def __init__(self, model_name: str, max_new_tokens: int = 50, max_retries: int = 6, **kwargs):
@@ -26,7 +26,7 @@ class LiteLLMModel(ModelInterface):
     def _generate_parameters(self,sys_prompt,user_prompt):
         messages = [
             {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "user",   "content": user_prompt},
         ]
 
         params = {
@@ -95,7 +95,7 @@ class HuggingFaceModel(ModelInterface):
 
         try:
             prompt = self.build_chat_prompt(user_prompt, sys_prompt)
-        except Exception as e:
+        except Exception as e: #incase model does not support chat template
             print(f"Error in building chat prompt: {e}")
             prompt = sys_prompt + user_prompt
 
