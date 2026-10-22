@@ -7,8 +7,8 @@ import pandas as pd
 from tqdm import tqdm
 from rdkit import Chem, RDLogger
 
-from ChemLLMBench.utils import LiteLLMModel, HuggingFaceModel
-from ChemLLMBench.Retrosynthesis.data import (
+from utils import LiteLLMModel, HuggingFaceModel
+from .data import (
     load_retro_dataset as load_dataset, INPUT_COL, TARGET_COL, INPUT_LABEL, TARGET_LABEL,
 )
 

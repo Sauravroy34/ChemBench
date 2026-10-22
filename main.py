@@ -141,9 +141,7 @@ def _run_single_task(task_key, model_name, backend, sample_strategy, k,
                      temperature, max_new_tokens, output_dir):
     """Run a single benchmark task and return its results dict."""
     entry = TASK_REGISTRY[task_key]
-    print(f"\n{'▓' * 70}")
     print(f"  BENCHMARK: {entry['display']}")
-    print(f"{'▓' * 70}\n")
 
     fn = _import_function(entry["module"], entry["function"])
 
