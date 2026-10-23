@@ -10,21 +10,32 @@ Run specific tasks:
     python -m ChemLLMBench.main --model gpt-4 --backend api \
         --tasks name_prediction property_prediction
 
+Run the zero-shot reaction-component selection tasks:
+    python -m ChemLLMBench.main --model gpt-4 --backend api \
+        --tasks reaction_component_selection --data-dir path/to/csvs
+
 Programmatic usage:
     from ChemLLMBench.main import run_all_benchmarks
     results = run_all_benchmarks(model_name="gpt-4", backend="api")
 """
 
 import argparse
+import datetime
+import inspect
 import json
 import os
-import datetime
 
 
 # ── Registry of available benchmark tasks ────────────────────────────────────
 # Each entry maps a short task key to:
 #   (display_name, module_import_path, run_function_name, extra_kwargs)
 # extra_kwargs are merged into the common kwargs passed to run_benchmark.
+# Common kwargs a function does not accept (e.g. `k` for zero-shot-only
+# tasks) are dropped automatically, see _filter_kwargs.
+
+# NOTE: adjust the module path of the selection tasks to wherever you put the
+# reagent / ligand / solvent file.
+SELECTION_MODULE = "Reaction_Selection.selection"
 
 TASK_REGISTRY = {
     # ── Name Prediction (4 sub-tasks) ────────────────────────────────────
@@ -93,6 +104,26 @@ TASK_REGISTRY = {
         "kwargs": {},
     },
 
+    # ── Reaction Component Selection (3 sub-tasks, zero-shot only) ───────
+    "reagent_selection": {
+        "display": "Reaction Selection – Reagent (zero-shot)",
+        "module": SELECTION_MODULE,
+        "function": "run_benchmark",
+        "kwargs": {"tasks": ["Reagent_selection"]},
+    },
+    "ligand_selection": {
+        "display": "Reaction Selection – Ligand (zero-shot)",
+        "module": SELECTION_MODULE,
+        "function": "run_benchmark",
+        "kwargs": {"tasks": ["Ligand_selection"]},
+    },
+    "solvent_selection": {
+        "display": "Reaction Selection – Solvent (zero-shot)",
+        "module": SELECTION_MODULE,
+        "function": "run_benchmark",
+        "kwargs": {"tasks": ["Solvent_selection"]},
+    },
+
     # ── Retrosynthesis ───────────────────────────────────────────────────
     "retrosynthesis": {
         "display": "Retrosynthesis",
@@ -125,11 +156,19 @@ TASK_GROUPS = {
     ],
     "property_prediction": ["bbbp", "bace", "tox21", "hiv", "clintox"],
     "reaction_prediction": ["reaction_prediction"],
+    "reaction_component_selection": [
+        "reagent_selection", "ligand_selection", "solvent_selection",
+    ],
     "retrosynthesis": ["retrosynthesis"],
     "molecule_design": ["mol_caption", "mol_design"],
 }
 
+# Metric keys tried (in order) when printing the one-line summary
+PRIMARY_METRIC_KEYS = ("accuracy", "exact_match", "top1_accuracy")
+INVALID_METRIC_KEY = "invalid_smiles_percent"
 
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 def _import_function(module_path: str, function_name: str):
     """Dynamically import a function from a dotted module path."""
     import importlib
@@ -137,15 +176,54 @@ def _import_function(module_path: str, function_name: str):
     return getattr(mod, function_name)
 
 
+def _filter_kwargs(fn, kwargs):
+    """Keep only the kwargs `fn` accepts (unless it takes **kwargs).
+
+    Returns (accepted_kwargs, list_of_dropped_names).
+    """
+    params = inspect.signature(fn).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kwargs, []
+    accepted = {k: v for k, v in kwargs.items() if k in params}
+    dropped = [k for k in kwargs if k not in params]
+    return accepted, dropped
+
+
+def _extract_metrics(result):
+    """Get a flat metrics dict from a benchmark's return value.
+
+    Handles both shapes:
+      {"metrics": {...}, ...}                       (most tasks)
+      {"Some_task": {"metrics": {...}, ...}}        (selection tasks)
+    """
+    if not isinstance(result, dict):
+        return {}
+    if isinstance(result.get("metrics"), dict):
+        return result["metrics"]
+    nested = [
+        v["metrics"] for v in result.values()
+        if isinstance(v, dict) and isinstance(v.get("metrics"), dict)
+    ]
+    return nested[0] if len(nested) == 1 else {}
+
+
+def _primary_metric(metrics):
+    """First available primary metric (0.0 is a valid value, not 'missing')."""
+    for key in PRIMARY_METRIC_KEYS:
+        if metrics.get(key) is not None:
+            return metrics[key]
+    return None
+
+
 def _run_single_task(task_key, model_name, backend, sample_strategy, k,
-                     temperature, max_new_tokens, output_dir):
+                     temperature, max_new_tokens, output_dir, data_dir):
     """Run a single benchmark task and return its results dict."""
     entry = TASK_REGISTRY[task_key]
     print(f"  BENCHMARK: {entry['display']}")
 
     fn = _import_function(entry["module"], entry["function"])
 
-    # Build kwargs — merge task-specific kwargs with common ones
+    # Build kwargs: merge task-specific kwargs with common ones
     kwargs = dict(entry["kwargs"])
     kwargs["model_name"] = model_name
     kwargs["backend"] = backend
@@ -154,6 +232,13 @@ def _run_single_task(task_key, model_name, backend, sample_strategy, k,
     kwargs["temperature"] = temperature
     kwargs["max_new_tokens"] = max_new_tokens
     kwargs["output_dir"] = output_dir
+    kwargs["data_dir"] = data_dir
+
+    # Drop anything this task's run_benchmark doesn't take
+    # (e.g. k / sample_strategy for zero-shot-only tasks, data_dir for others)
+    kwargs, dropped = _filter_kwargs(fn, kwargs)
+    if dropped:
+        print(f"  (ignored args for this task: {', '.join(dropped)})")
 
     try:
         result = fn(**kwargs)
@@ -172,6 +257,7 @@ def run_all_benchmarks(
     temperature: float = 0.0,
     max_new_tokens: int = 256,
     output_dir: str = "results",
+    data_dir: str = ".",
 ):
     """
     Run one or more ChemLLMBench tasks.
@@ -187,14 +273,19 @@ def run_all_benchmarks(
         None or ["all"] runs every task.
     sample_strategy : str
         "random" or "scaffold" for few-shot example selection.
+        Ignored by zero-shot-only tasks (reaction component selection).
     k : int
         Number of few-shot examples (0 for zero-shot).
+        Ignored by zero-shot-only tasks (reaction component selection).
     temperature : float
         Sampling temperature.
     max_new_tokens : int
         Max tokens to generate.
     output_dir : str
         Directory to save per-task results.
+    data_dir : str
+        Directory containing the reagent/ligand/solvent *_sample.csv files.
+        Only used by the reaction component selection tasks.
 
     Returns
     -------
@@ -233,6 +324,7 @@ def run_all_benchmarks(
     print(f"  Model    : {model_name}")
     print(f"  Backend  : {backend}")
     print(f"  Strategy : {sample_strategy} (k={k})")
+    print(f"  Data dir : {data_dir}")
     print(f"  Tasks    : {', '.join(task_keys)}")
     print(f"{'═' * 70}")
 
@@ -247,6 +339,7 @@ def run_all_benchmarks(
             temperature=temperature,
             max_new_tokens=max_new_tokens,
             output_dir=output_dir,
+            data_dir=data_dir,
         )
         all_results[task_key] = result
 
@@ -257,15 +350,12 @@ def run_all_benchmarks(
     for task_key, res in all_results.items():
         display = TASK_REGISTRY[task_key]["display"]
         if res["status"] == "success":
-            metrics = res["result"].get("metrics", {})
-            # Try to find the primary metric
-            primary = (
-                metrics.get("accuracy")
-                or metrics.get("exact_match")
-                or metrics.get("top1_accuracy")
-            )
+            metrics = _extract_metrics(res["result"])
+            primary = _primary_metric(metrics)
             metric_str = f"{primary:.4f}" if primary is not None else "done"
-            print(f"  ✓ {display:<45s}  {metric_str}")
+            invalid = metrics.get(INVALID_METRIC_KEY)
+            invalid_str = f"  (invalid: {invalid:.2f}%)" if invalid is not None else ""
+            print(f"  ✓ {display:<45s}  {metric_str}{invalid_str}")
         else:
             print(f"  ✗ {display:<45s}  FAILED: {res['error'][:40]}")
     print(f"{'═' * 70}\n")
@@ -280,12 +370,13 @@ def run_all_benchmarks(
         "sample_strategy": sample_strategy,
         "k": k,
         "temperature": temperature,
+        "data_dir": data_dir,
         "timestamp": timestamp,
         "tasks": {
             key: {
                 "display": TASK_REGISTRY[key]["display"],
                 "status": res["status"],
-                "metrics": res["result"].get("metrics") if res["status"] == "success" else None,
+                "metrics": _extract_metrics(res["result"]) if res["status"] == "success" else None,
                 "error": res.get("error"),
             }
             for key, res in all_results.items()
@@ -326,12 +417,16 @@ def main():
     )
     parser.add_argument(
         "--strategy", type=str, default="random", choices=["random", "scaffold"],
-        help="Few-shot example sampling strategy.",
+        help="Few-shot example sampling strategy (not used by selection tasks).",
     )
-    parser.add_argument("--k", type=int, default=8, help="Number of few-shot examples (0 = zero-shot).")
+    parser.add_argument("--k", type=int, default=8,
+                        help="Number of few-shot examples (0 = zero-shot; not used by selection tasks).")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature.")
     parser.add_argument("--max-new-tokens", type=int, default=256, help="Max new tokens to generate.")
     parser.add_argument("--output-dir", type=str, default="results", help="Output directory.")
+    parser.add_argument("--data-dir", type=str, default=".",
+                        help="Directory with reagent/ligand/solvent *_sample.csv files "
+                             "(selection tasks only).")
 
     args = parser.parse_args()
 
@@ -344,6 +439,7 @@ def main():
         temperature=args.temperature,
         max_new_tokens=args.max_new_tokens,
         output_dir=args.output_dir,
+        data_dir=args.data_dir,
     )
 
 

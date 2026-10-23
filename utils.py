@@ -1,13 +1,23 @@
 import gc
+import os
 import torch
 import time
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 from dotenv import load_dotenv
+from langfuse import get_client, propagate_attributes
 import litellm
 
 load_dotenv(override=True)
 litellm.drop_params = True
+
+
+if os.environ.get('LANGFUSE_PUBLIC_KEY') and os.environ.get('LANGFUSE_SECRET_KEY'):
+    LANGFUSE = get_client()
+else:
+    LANGFUSE = None
+    print('WARNING: LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY not set - nothing will be logged to Langfuse')
+
 
 class ModelInterface:
 
@@ -46,6 +56,10 @@ class LiteLLMModel(ModelInterface):
             text = ""
             for attempt in range(self.max_retries):
                 try:
+
+                    litellm.success_callback = ["langfuse"] if LANGFUSE else []
+                    litellm.failure_callback = ["langfuse"] if LANGFUSE else []
+                    
                     response = litellm.completion(**params)
                     text = response.choices[0].message.content.strip()
                     break

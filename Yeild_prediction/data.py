@@ -1,7 +1,15 @@
-import numpy as np 
 import pandas as pd
-import requests
-import io
+import random
+import numpy as np
+import os
+
+# ---------------------------------------------------------------------------
+# Constants & Prompts
+# ---------------------------------------------------------------------------
+
+SEED = 42
+random.seed(SEED)
+
 BH_PROMPT = """
 You are an expert chemist, your task is to predict the yield of reaction using your experienced chemical yield prediction knowledge.
 Please strictly follow the format, no other information can be provided. Given the SMILES string of a Buchwald-Hartwig reaction, 
@@ -11,7 +19,6 @@ In comparison to the traditional Buchwald-Hartwig reaction, this study involved 
 You will be provided with several examples molecules. Please answer with only Yes or No.
 """
 
-
 SUZUKI_PROMPT = """
 You are an expert chemist, your task is to predict the yield of reaction using your experienced chemical yield prediction knowledge.
 Please strictly follow the format, no other information can be provided. Given the SMILES string of a Suzuki-Miyaura reaction, 
@@ -20,54 +27,187 @@ The reactants are separated by '.' and product are separated by '>>'. High-yield
 You will be provided with several examples molecules. Please answer with only Yes or No.
 """
 
-BH_URL = "https://raw.githubusercontent.com/ChemFoundationModels/ChemLLMBench/main/data/yield_prediction/BH_dataset%20.npz"
-BH_TEST_URL = "https://raw.githubusercontent.com/ChemFoundationModels/ChemLLMBench/main/data/yield_prediction/BH_sample_100_test.npZ"
+# Local file paths (assumes the files are in the same folder as this script)
+BH_TRAIN_FILE = "BH_dataset .npz"
+BH_TEST_FILE = "BH_sample_100_test.npZ"
 
+SUZUKI_TRAIN_FILE = "Suzuki.npz"
+SUZUKI_TEST_FILE = "SU_sample_100_test.npZ"
 
-SUZUKI = "https://raw.githubusercontent.com/ChemFoundationModels/ChemLLMBench/main/data/yield_prediction/Suzuki.npz"
-SUZUKI_TEST = "https://raw.githubusercontent.com/ChemFoundationModels/ChemLLMBench/main/data/yield_prediction/SU_sample_100_test.npZ"
+SUZUKI_MAP = {
+    "train": SUZUKI_TRAIN_FILE,
+    "test": SUZUKI_TEST_FILE,
+    "prompt": SUZUKI_PROMPT
+}
 
+BH_MAP = {
+    "train": BH_TRAIN_FILE,
+    "test": BH_TEST_FILE,
+    "prompt": BH_PROMPT
+}
 
+TASK_MAP = {
+    "Buchwald-Hartwig": BH_MAP,
+    "Suzuki-Miyaura": SUZUKI_MAP
+}
 
+# ---------------------------------------------------------------------------
+# Data Loading & Processing
+# ---------------------------------------------------------------------------
 
+def _extract_npz_to_df(file_path, split):
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Could not find '{file_path}'. Please make sure you downloaded it to the same directory as this script.")
+        
+    npz = np.load(file_path, allow_pickle=True)
 
-def _url_to_df(url):
-    response = requests.get(url)
-    
-    if response.status_code == 200:
-        with np.load(io.BytesIO(response.content), allow_pickle=True) as data:
-
-            raw_data = data['data_df'] if "TEST" in url else data['data'] 
-            return raw_data if "TEST" in url else raw_data[2]
+    if split == "train":
+        data = npz['data'][2]
+        df = pd.DataFrame(data)
+        df.rename(columns={"yld": "yeild", "rsmi": "reaction"}, inplace=True)
+        cols = list(df.columns)
+        cols[0], cols[1] = cols[1], cols[0]
+        df = df[cols]
+        df['yeild'] = np.where(df['yeild'] > 70, 'Yes', 'No')
+        return df
     else:
-        print(f"Failed to download file. Status code: {response.status_code}")
-        return None
+        data = npz['data_df']
+        df = pd.DataFrame({
+            "reaction": data[:, 0],
+            "yeild": data[:, 1]
+        })
+        return df
+
+# ---------------------------------------------------------------------------
+# Sampling strategies
+# ---------------------------------------------------------------------------
+
+def _format_examples(rows):
+    """Return a list of (reaction, yeild) tuples."""
+    return list(zip(rows["reaction"], rows["yeild"]))
+
+def _random_sample_examples(df, k):
+    """Randomly sample *k* training examples for in-context learning."""
+    sampled = df.sample(k, random_state=SEED)
+    return _format_examples(sampled)
+
+# ---------------------------------------------------------------------------
+# Prompt construction
+# ---------------------------------------------------------------------------
+
+def _build_system_prompt(base_prompt, examples):
+    """Combine the base task prompt with formatted ICL examples."""
+    system_prompt = base_prompt.strip()
+    if not examples:
+        return system_prompt
+
+    system_prompt += "\n\n" + "\n\n".join(
+        f"reaction: {inp}\nHigh yeilding: {out}"
+        for inp, out in examples
+    )
+    return system_prompt
+
+def _create_prompt(sample_strategy, df_train, df_test, base_prompt, k):
+    """Build parallel lists of (system_prompts, user_prompts)."""
+    test_inputs = df_test["reaction"].tolist()
+
+    # User prompt: present the input and ask for the output
+    user_prompts = [f"reaction: {inp}\nyeild:" for inp in test_inputs]
+
+    # Zero-shot — no examples
+    if k == 0:
+        system_prompt = _build_system_prompt(base_prompt, examples=None)
+        return [system_prompt] * len(test_inputs), user_prompts
+
+    # Random — same examples for every test molecule
+    if sample_strategy == "random":
+        system_prompt = _build_system_prompt(
+            base_prompt, _random_sample_examples(df_train, k)
+        )
+        return [system_prompt] * len(test_inputs), user_prompts
+
+    # Explicitly block unsupported strategies
+    raise ValueError(f"Unknown or unsupported sample_strategy: '{sample_strategy}'. Only 'random' is allowed.")
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+def load_function(name, sample_strategy="random", k=0):
+    """
+    Load the Yield-Prediction dataset and return prompts + test data.
+
+    Parameters
+    ----------
+    name : str
+        Task name — either 'Buchwald-Hartwig' or 'Suzuki-Miyaura'.
+    sample_strategy : str, default "random"
+        How to choose ICL examples. Only "random" is supported.
+    k : int, default 0
+        Number of in-context examples (0 = zero-shot).
+
+    Returns
+    -------
+    system_prompts : list[str]
+    user_prompts   : list[str]
+    df_test        : pd.DataFrame
+    """
+    if name not in TASK_MAP:
+        raise ValueError(
+            f"Unknown task '{name}'. Choose from {list(TASK_MAP.keys())}"
+        )
+
+    task_config = TASK_MAP[name]
+
+    # Load from local dataframes
+    df_train = _extract_npz_to_df(task_config["train"], "train")
+    df_test = _extract_npz_to_df(task_config["test"], "test")
+
+    # Generate prompts
+    system_prompts, user_prompts = _create_prompt(
+        sample_strategy=sample_strategy,
+        df_train=df_train,
+        df_test=df_test,
+        base_prompt=task_config["prompt"],
+        k=k,
+    )
+
+    return system_prompts, user_prompts, df_test
 
 
-with np.load("BH_dataset .npz", allow_pickle=True) as data:
-    # Extract the object array containing the dataframe
-    raw_data = data["data"]
-    
-    # Use .item() to extract the actual pandas DataFrame from the numpy wrapper
-    # print(raw_data.shape)
-    print(type(raw_data[2]).__name__) 
-    print(raw_data[2].keys())
-    print(len(raw_data[2]["rsmi"])) # contains the juice 
+def _parse_prediction(raw_text, dataset_name):
+    import re
+    """Extract the first Yes/No answer relevant to the target task.
+    Returns 1 (Yes), 0 (No), or -1 (parse failure)."""
+    if not raw_text:
+        return -1
+
+    text = raw_text.strip()
+
+    # Try to find "<TaskKey>: Yes/No" pattern first
+    pattern = re.compile(
+        rf"High yeilding\s*:\s*(Yes|No)", re.IGNORECASE
+    )
+    match = pattern.search(text)
+    if match:
+        return 1 if match.group(1).lower() == "yes" else 0
+
+    # Fallback: first standalone Yes or No in the text
+    fallback = re.search(r"\b(Yes|No)\b", text, re.IGNORECASE)
+    if fallback:
+        return 1 if fallback.group(1).lower() == "yes" else 0
+
+    return -1
 
 
 
+if __name__ == "__main__":
+    s_p , u_p , df_test = load_function("Buchwald-Hartwig", k = 10)
+    print(s_p[0])
+    print("-----------")
+    print(u_p[0])
+    print("i would say thats a Yes.")
+    print(_parse_prediction("i would say thats a Yes.", "Buchwald-Hartwig"))
 
 
 
-
-# with np.load("SU_sample_100_test.npz", allow_pickle=True) as data:
-#     # Extract the object array containing the dataframe
-#     print(data)   
-#     print(data["data_df"]) 
-#     # print(data["data"].shape)
-#     # # # Use .item() to extract the actual pandas DataFrame from the numpy wrapper
-#     # # print(raw_data.shape)
-#     # # print(raw_data[2]) # contains the juice 
-#     # print(data["data"][2])
-
-    
