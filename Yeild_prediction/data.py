@@ -1,3 +1,4 @@
+from warnings import warn
 import pandas as pd
 import random
 import numpy as np
@@ -125,9 +126,14 @@ def _create_prompt(sample_strategy, df_train, df_test, base_prompt, k):
             base_prompt, _random_sample_examples(df_train, k)
         )
         return [system_prompt] * len(test_inputs), user_prompts
+        
+    else:
+        warn(f"Only support random sampling strategy for now, falling back to random sampling")
+        system_prompt = _build_system_prompt(
+            base_prompt, _random_sample_examples(df_train, k)
+        )
+        return [system_prompt] * len(test_inputs), user_prompts
 
-    # Explicitly block unsupported strategies
-    raise ValueError(f"Unknown or unsupported sample_strategy: '{sample_strategy}'. Only 'random' is allowed.")
 
 # ---------------------------------------------------------------------------
 # Public entry point

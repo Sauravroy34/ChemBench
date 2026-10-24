@@ -146,6 +146,8 @@ def run_benchmark(
     data_dir: str = ".",
     temperature: float = 0.0,
     max_new_tokens: int = 256,
+    k: int = 5,
+    sample_strategy: str = "random",
     output_dir: str = "results",
 ):
     """Zero-shot reagent / ligand / solvent selection benchmark (accuracy only).
